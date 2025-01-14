@@ -3,23 +3,123 @@
     <title>trek-mate osm editor</title>
   </head>
   <body>
-    Hello World!
+    <div id="content">trek-mate osm editor<br></div>
     <script>
-      async function fetchUserDetails() {
-	  const endpoint = 'https://api.openstreetmap.org/api/0.6/user/details';
+      const OSM_AUTH_URL = "https://www.openstreetmap.org/oauth2/authorize"
+      const OSM_TOKEN_URL = "https://www.openstreetmap.org/oauth2/token"
+      const CLIENT_ID = "qqzVapFWm8LNNAje1qFbqSPI_3essT1fVCstmb-ZYu0"
+      const CLIENT_SECRET = "syBe0-ipv1xAO5pZr0BrA6bxkdOeXGeyYTYoQm85Ygg"
+      //const REDIRECT_URI = "https://vanjakom.github.io/trek-mate-osme/"
+      const REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
+      const SCOPE = "read_prefs write_api"
+
+      const COOKIE_TOKEN = 'osm_access_token'
+
+      // Utility to get query parameters from the URL
+      function getQueryParams() {
+	  return Object.fromEntries(new URLSearchParams(window.location.search).entries());
+      }
+
+      // Utility to set a cookie
+      function setCookie(name, value, days = 7) {
+	  const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString();
+	  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/`;
+      }
+
+      // Utility to get a cookie
+      function getCookie(name) {
+	  const cookies = document.cookie.split('; ').reduce((acc, cookie) => {
+	      const [key, value] = cookie.split('=');
+	      acc[key] = decodeURIComponent(value);
+	      return acc;
+	  }, {});
+	  return cookies[name];
+      }
+
+      function removeCookie(name) {
+	  document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/`
+      }
+      
+      // Check if the user is logged in by looking for the access token
+      async function checkLogin() {
+	  const accessToken = getCookie(COOKIE_TOKEN);
+
+	  if (accessToken) {
+	      console.log('User is logged in. Access Token:', accessToken);
+	      // Optionally: Use the access token to call the API
+	      return accessToken;
+	  } else {
+	      console.log('User is not logged in. Redirecting to OSM login...');
+	      redirectToOSMLogin();
+	  }
+      }
+
+      // Redirect the user to the OSM login page
+      function redirectToOSMLogin() {
+	  const currentUrl = window.location.href;
+	  const loginUrl = `${OSM_AUTH_URL}?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${SCOPE}&state=${encodeURIComponent(currentUrl)}`;
+	  window.location.href = loginUrl;
+      }
+
+      // Handle the OAuth2 redirect and exchange the authorization code for an access token
+      async function handleOAuthRedirect() {
+	  const params = getQueryParams();
+
+	  if (params.code) {
+	      try {
+		  const response = await fetch(OSM_TOKEN_URL, {
+		      method: 'POST',
+		      headers: {
+			  'Content-Type': 'application/x-www-form-urlencoded',
+		      },
+		      body: new URLSearchParams({
+			  grant_type: 'authorization_code',
+			  code: params.code,
+			  client_id: CLIENT_ID,
+			  client_secret: CLIENT_SECRET,
+			  redirect_uri: REDIRECT_URI,
+		      }),
+		  });
+
+		  if (response.ok) {
+		      const data = await response.json();
+		      console.log('Access Token:', data.access_token);
+
+		      // Store the access token in a cookie
+		      setCookie(COOKIE_TOKEN, data.access_token);
+
+		      // Redirect back to the original state URL
+		      const stateUrl = params.state || '/';
+		      window.location.href = stateUrl;
+		  } else {
+		      console.error('Failed to exchange code for token:', response.status, response.statusText);
+		  }
+	      } catch (error) {
+		  console.error('Error during token exchange:', error);
+	      }
+	  }
+      }
+
+      async function fetchUserName() {
+	  const endpoint = 'https://api.openstreetmap.org/api/0.6/user/details.json';
+	  const token = await checkLogin()
 	  
 	  try {
 	      const response = await fetch(endpoint, {
 		  method: 'GET',
 		  headers: {
-		      'Authorization': 'Bearer YOUR_ACCESS_TOKEN', // Replace with a valid access token
+		      'Authorization': "Bearer " + token, // Replace with a valid access token
 		  },
 	      });
 
 	      if (response.ok) {
-		  const userDetails = await response.text(); // The API returns XML
-		  console.log(userDetails);
+		  const userDetails = await response.json(); // The API returns XML
+		  console.log(userDetails.user.display_name);
+		  return userDetails.user.display_name
 		  // You can use a library like xml2js to parse XML if needed
+	      } else if (response.status == 401) {
+		  console.log("unauthorized")
+		  redirectToOSMLogin()
 	      } else {
 		  console.error(`Error: ${response.status} ${response.statusText}`)
 	      }
@@ -28,7 +128,67 @@
 	  }
       }
 
-      fetchUserDetails()
+      function logout() {
+	  removeCookie(COOKIE_TOKEN)
+      }
+
+      async function fetchTags(type, id) {
+	  const endpoint = `https://api.openstreetmap.org/api/0.6/${type}/${id}.json`;
+
+	  try {
+	      const response = await fetch(endpoint, {
+		  method: 'GET',
+		  headers: {
+		      'Content-Type': 'application/json',
+		  },
+	      });
+
+	      if (!response.ok) {
+		  throw new Error(`Error fetching data: ${response.status} ${response.statusText}`);
+	      }
+
+	      const data = await response.json();
+	      console.log('Fetched data:', data);
+
+	      // Extract and return tags if available
+	      if (data.elements && data.elements[0] && data.elements[0].tags) {
+		  return data.elements[0].tags; // Tags are typically found in `elements[0].tags`
+	      } else {
+		  throw new Error('No tags found for the given type and ID.');
+	      }
+	  } catch (error) {
+	      console.error('Fetch error:', error);
+	      throw error;
+	  }
+      }
+      
+      // Initialize the script
+      (async function init() {
+	  const params = getQueryParams();
+
+	  if (params.code) {
+	      // Handle the OAuth2 redirect
+	      await handleOAuthRedirect();
+	  }
+
+	  const userName = await fetchUserName()
+
+	  contentDiv = document.getElementById("content")
+	  contentDiv.innerHTML += "Hello: " + userName
+	  contentDiv.innerHTML += " (<a href='javascript:logout()'>logout</a>)"
+	  contentDiv.innerHTML += "<br><br>"
+	 
+	  // todo use parameter action to determine what is needed
+	  // assuming action=modifyTags
+	  
+	  const tags = await fetchTags(params.type, params.id)
+	  contentDiv.innerHTML +=
+	      "type: " + params.type +
+	      " id: " + params.id + "<br><br>"
+	  for (const [key, value] of Object.entries(tags)) {
+              contentDiv.innerHTML += key + " = " + value + "<br>"
+          }
+      })();
     </script>
   </body>
 </html>
