@@ -4,6 +4,7 @@
   </head>
   <body>
     <div id="content">trek-mate osm editor<br></div>
+    <a href="#" onclick="commitFn(); return false;">submit</a>
     <script>
       const OSM_AUTH_URL = "https://www.openstreetmap.org/oauth2/authorize"
       const OSM_TOKEN_URL = "https://www.openstreetmap.org/oauth2/token"
@@ -15,6 +16,15 @@
 
       const COOKIE_TOKEN = 'osm_access_token'
 
+      function escapeXml(value) {
+	  return value
+	      .replace(/&/g, "&amp;")
+	      .replace(/</g, "&lt;")
+	      .replace(/>/g, "&gt;")
+	      .replace(/"/g, "&quot;")
+	      .replace(/'/g, "&apos;");
+      }
+      
       // Utility to get query parameters from the URL
       function getQueryParams() {
 	  return Object.fromEntries(new URLSearchParams(window.location.search).entries());
@@ -132,7 +142,7 @@
 	  removeCookie(COOKIE_TOKEN)
       }
 
-      async function fetchTags(type, id) {
+      async function fetchObject(type, id) {
 	  const endpoint = `https://api.openstreetmap.org/api/0.6/${type}/${id}.json`;
 
 	  try {
@@ -151,8 +161,8 @@
 	      console.log('Fetched data:', data);
 
 	      // Extract and return tags if available
-	      if (data.elements && data.elements[0] && data.elements[0].tags) {
-		  return data.elements[0].tags; // Tags are typically found in `elements[0].tags`
+	      if (data.elements && data.elements[0]) {
+		  return data.elements[0]; // Tags are typically found in `elements[0].tags`
 	      } else {
 		  throw new Error('No tags found for the given type and ID.');
 	      }
@@ -161,7 +171,124 @@
 	      throw error;
 	  }
       }
-      
+
+      async function createChangeset(comment) {
+	  const endpoint = "https://api.openstreetmap.org/api/0.6/changeset/create";
+	  const changesetXml = `
+    <osm>
+      <changeset>
+        <tag k="created_by" v="trek mate osm editor" />
+        <tag k="comment" v="${comment}" />
+      </changeset>
+    </osm>`;
+
+	  const token = await checkLogin()
+	  
+	  const response = await fetch(endpoint, {
+	      method: "PUT",
+	      headers: {
+		  "Content-Type": "text/xml",
+		  Authorization: `Bearer ${token}`,
+	      },
+	      body: changesetXml,
+	  });
+
+	  if (!response.ok) {
+	      const errorText = await response.text();
+	      throw new Error(`Error creating changeset: ${response.status} ${response.statusText}\nDetails: ${errorText}`);
+	  }
+
+	  const changesetId = await response.text();
+	  return changesetId.trim();
+      }
+
+      // Function to close a changeset
+      async function closeChangeset(changesetId) {
+	  const endpoint = `https://api.openstreetmap.org/api/0.6/changeset/${changesetId}/close`;
+	  const token = await checkLogin()
+	  
+	  const response = await fetch(endpoint, {
+	      method: "PUT",
+	      headers: {
+		  Authorization: `Bearer ${token}`,
+	      },
+	  });
+
+	  if (!response.ok) {
+	      const errorText = await response.text();
+	      throw new Error(`Error closing changeset: ${response.status} ${response.statusText}\nDetails: ${errorText}`);
+	  }
+      }
+
+      async function updateObject(osmObject, message) {
+	  const token = await checkLogin()
+	  
+	  const { type, id, version, tags, lat, lon, nodes, members } = osmObject; // Extract attributes
+
+	  try {
+	      const changesetId = await createChangeset(message);
+	      
+	      let osmXml = `
+<osm><${type} id="${id}" version="${version}"
+changeset="${changesetId}"`;
+
+	      if (type == "node" && lat && lon) {
+		  // Include latitude and longitude for nodes
+		  osmXml += ` lat="${lat}" lon="${lon}"`;
+	      }
+
+	      osmXml += `>`;
+
+	      if (type == "way" && nodes) {
+		  // Include node references for ways
+		  nodes.forEach(nodeId => {
+		      osmXml += `<nd ref="${nodeId}" />`;
+		  });
+	      }
+
+	      if (type == "relation" && members) {
+		  // Include member references for relations
+		  members.forEach(({ type, ref, role }) => {
+		      osmXml += `<member type="${type}" ref="${ref}" role="${role}" />`;
+		  });
+	      }
+
+	      // Add tags
+	      Object.entries(tags).forEach(([key, value]) => {
+		  osmXml += `<tag k="${escapeXml(key)}" v="${escapeXml(value)}" />`;
+	      });
+
+	      osmXml += `</${type}></osm>`;
+
+	      console.log(osmXml)
+	      
+	      const endpoint = `https://api.openstreetmap.org/api/0.6/${type}/${id}`;
+	      const response = await fetch(endpoint, {
+		  method: "PUT",
+		  headers: {
+		      "Content-Type": "text/xml",
+		      Authorization: `Bearer ${token}`,
+		  },
+		  body: osmXml,
+	      });
+
+	      if (!response.ok) {
+		  const errorText = await response.text();
+		  throw new Error(`Error updating object: ${response.status} ${response.statusText}\nDetails: ${errorText}`);
+	      }
+
+	      // Step 4: Close the changeset
+	      await closeChangeset(changesetId);
+	
+	      console.log("Changeset closed successfully!");
+	      return changesetId
+	  } catch (error) {
+	      console.error("Error during update process:", error);
+	  }
+      }
+
+      var commitFn
+
       // Initialize the script
       (async function init() {
 	  const params = getQueryParams();
@@ -180,14 +307,70 @@
 	 
 	  // todo use parameter action to determine what is needed
 	  // assuming action=modifyTags
+
+	  var type = params.id[0]
+	  if (type == "n") {
+	      type = "node"
+	  } else if (type == "w") {
+	      type = "way"
+	  } else {
+	      type = "relation"
+	  }
+	      
+	  const id = params.id.slice(1)
 	  
-	  const tags = await fetchTags(params.type, params.id)
+	  const object = await fetchObject(type, id)
+	  console.log(object)
+	  const tags = object.tags
 	  contentDiv.innerHTML +=
-	      "type: " + params.type +
-	      " id: " + params.id + "<br><br>"
+	      "type: " + type +
+	      " id: " + id + "<br><br>"
 	  for (const [key, value] of Object.entries(tags)) {
               contentDiv.innerHTML += key + " = " + value + "<br>"
           }
+
+	  var addTags = []
+	  var deleteTags = []
+	  for (const param in params) {
+	      console.log(param)
+	      if (param != "action" && param != "id" && param != "commit") {
+		  if (params[param] == "") {
+		      deleteTags.push(param)
+		  } else {
+		      addTags.push([param, params[param]])
+		  }
+	      }
+	  }
+
+	  contentDiv.innerHTML += "<br>adding tags:<br>"
+	  addTags.forEach(tag => {
+	      contentDiv.innerHTML += tag[0] + " = " + tag[1] + "<br>"
+	  })
+
+	  contentDiv.innerHTML += "<br>removing tags:<br>"
+	  deleteTags.forEach(tag => {
+	      contentDiv.innerHTML += tag + "<br>"
+	  })
+
+	  addTags.forEach(([key, value]) => {
+	      object.tags[key] = value;
+	  });
+	  deleteTags.forEach(tag => {
+	      delete object.tags[tag];
+	  });
+
+	  contentDiv.innerHTML += "<br>message: " + params.commit + "<br><br>"
+
+	  // prepare everything for commit
+
+	  commitFn = async function () {
+	      const changesetId = await updateObject(object, params.commit)
+	      
+	      const changesetUrl = `https://www.openstreetmap.org/changeset/${changesetId}`;
+	      
+	      // Redirect the user to the changeset page
+	      window.location.href = changesetUrl;
+	  }
       })();
     </script>
   </body>
