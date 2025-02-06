@@ -35,17 +35,18 @@
 	  const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString();
 	  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/`;
       }
-
+      
       // Utility to get a cookie
       function getCookie(name) {
-	  const cookies = document.cookie.split('; ').reduce((acc, cookie) => {
-	      const [key, value] = cookie.split('=');
-	      acc[key] = decodeURIComponent(value);
-	      return acc;
-	  }, {});
+	  const cookies = document
+		.cookie.split('; ')
+		.reduce((acc, cookie) => {
+		    const [key, value] = cookie.split('=');
+		    acc[key] = decodeURIComponent(value);
+		    return acc;}, {});
 	  return cookies[name];
       }
-
+      
       function removeCookie(name) {
 	  document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/`
       }
@@ -111,7 +112,7 @@
       }
 
       async function fetchUserName() {
-	  const endpoint = 'https://api.openstreetmap.org/api/0.6/user/details.json';
+      const endpoint = 'https://api.openstreetmap.org/api/0.6/user/details.json';
 	  const token = await checkLogin()
 	  
 	  try {
@@ -144,7 +145,7 @@
 
       async function fetchObject(type, id) {
 	  const endpoint = `https://api.openstreetmap.org/api/0.6/${type}/${id}.json`;
-
+	  
 	  try {
 	      const response = await fetch(endpoint, {
 		  method: 'GET',
@@ -181,7 +182,7 @@
         <tag k="comment" v="${comment}" />
       </changeset>
     </osm>`;
-
+	  
 	  const token = await checkLogin()
 	  
 	  const response = await fetch(endpoint, {
@@ -323,12 +324,13 @@ changeset="${changesetId}"`;
 	  console.log(object)
 	  const tags = object.tags
 	  contentDiv.innerHTML +=
-	      "type: " + type +
-	      " id: " + id + "<br><br>"
+	      "type: " + type + " id: " + id +
+	      " <a href='http://openstreetmap.org/" + type + "/" + id +
+	      "' target='_blank'>[osm]</a><br><br>"
 	  for (const [key, value] of Object.entries(tags)) {
               contentDiv.innerHTML += key + " = " + value + "<br>"
           }
-
+	  
 	  var addTags = []
 	  var deleteTags = []
 	  for (const param in params) {
